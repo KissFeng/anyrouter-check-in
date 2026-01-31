@@ -4,7 +4,6 @@ AnyRouter.top 自动签到脚本
 """
 
 import asyncio
-import hashlib
 import json
 import os
 import sys
@@ -19,35 +18,27 @@ from utils.notify import notify
 
 load_dotenv()
 
-BALANCE_HASH_FILE = 'balance_hash.txt'
+BALANCE_FILE = 'balance.json'
 
 
-def load_balance_hash():
-	"""加载余额hash"""
+def load_balance_history():
+	"""加载上一次的余额记录"""
 	try:
-		if os.path.exists(BALANCE_HASH_FILE):
-			with open(BALANCE_HASH_FILE, 'r', encoding='utf-8') as f:
-				return f.read().strip()
+		if os.path.exists(BALANCE_FILE):
+			with open(BALANCE_FILE, 'r', encoding='utf-8') as f:
+				return json.load(f)
 	except Exception:
 		pass
-	return None
+	return {}
 
 
-def save_balance_hash(balance_hash):
-	"""保存余额hash"""
+def save_balance_history(balances):
+	"""保存当前余额记录"""
 	try:
-		with open(BALANCE_HASH_FILE, 'w', encoding='utf-8') as f:
-			f.write(balance_hash)
+		with open(BALANCE_FILE, 'w', encoding='utf-8') as f:
+			json.dump(balances, f, ensure_ascii=False, indent=2)
 	except Exception as e:
-		print(f'Warning: Failed to save balance hash: {e}')
-
-
-def generate_balance_hash(balances):
-	"""生成余额数据的hash"""
-	# 将包含 quota 和 used 的结构转换为简单的 quota 值用于 hash 计算
-	simple_balances = {k: v['quota'] for k, v in balances.items()} if balances else {}
-	balance_json = json.dumps(simple_balances, sort_keys=True, separators=(',', ':'))
-	return hashlib.sha256(balance_json.encode('utf-8')).hexdigest()[:16]
+		print(f'Warning: Failed to save balance history: {e}')
 
 
 def parse_cookies(cookies_data):
@@ -144,7 +135,7 @@ def get_user_info(client, headers, user_info_url: str):
 					'success': True,
 					'quota': quota,
 					'used_quota': used_quota,
-					'display': f':money: Current balance: ${quota}, Used: ${used_quota}',
+					'display': f':money: 当前余额: ${quota}, 已用: ${used_quota}',
 				}
 		return {'success': False, 'error': f'Failed to get user info: HTTP {response.status_code}'}
 	except Exception as e:
@@ -278,14 +269,14 @@ async def main():
 
 	print(f'[INFO] Found {len(accounts)} account configurations')
 
-	last_balance_hash = load_balance_hash()
+	last_balance_history = load_balance_history()
 
 	success_count = 0
 	total_count = len(accounts)
 	notification_content = []
 	current_balances = {}
 	need_notify = False  # 是否需要发送通知
-	balance_changed = False  # 余额是否有变化
+	balance_increased = False  # 余额是否增加
 
 	for i, account in enumerate(accounts):
 		account_key = f'account_{i + 1}'
@@ -323,60 +314,77 @@ async def main():
 			need_notify = True  # 异常也需要通知
 			notification_content.append(f'[FAIL] {account_name} exception: {str(e)[:50]}...')
 
-	# 检查余额变化
-	current_balance_hash = generate_balance_hash(current_balances) if current_balances else None
-	if current_balance_hash:
-		if last_balance_hash is None:
-			# 首次运行
-			balance_changed = True
-			need_notify = True
-			print('[NOTIFY] First run detected, will send notification with current balances')
-		elif current_balance_hash != last_balance_hash:
-			# 余额有变化
-			balance_changed = True
-			need_notify = True
-			print('[NOTIFY] Balance changes detected, will send notification')
-		else:
-			print('[INFO] No balance changes detected')
-
-	# 为有余额变化的情况添加所有成功账号到通知内容
-	if balance_changed:
-		for i, account in enumerate(accounts):
-			account_key = f'account_{i + 1}'
-			if account_key in current_balances:
+	# 检查余额是否增加
+	for i, account in enumerate(accounts):
+		account_key = f'account_{i + 1}'
+		if account_key in current_balances and account_key in last_balance_history:
+			current_quota = current_balances[account_key]['quota']
+			last_quota = last_balance_history[account_key].get('quota', 0)
+			if current_quota > last_quota:
+				# 余额增加
+				balance_increased = True
+				need_notify = True
 				account_name = account.get_display_name(i)
-				# 只添加成功获取余额的账号，且避免重复添加
-				account_result = f'[BALANCE] {account_name}'
-				account_result += f'\n:money: Current balance: ${current_balances[account_key]["quota"]}, Used: ${current_balances[account_key]["used"]}'
+				increase_amount = current_quota - last_quota
+				print(f'[NOTIFY] {account_name} 余额增加: ${increase_amount}')
+				# 添加到通知内容
+				account_result = f'[余额增加] {account_name}'
+				account_result += f'\n:money: 当前余额: ${current_quota}, 已用: ${current_balances[account_key]["used"]}'
+				account_result += f'\n:arrow_up: 本次增加: ${increase_amount}'
 				# 检查是否已经在通知内容中（避免重复）
 				if not any(account_name in item for item in notification_content):
 					notification_content.append(account_result)
 
-	# 保存当前余额hash
-	if current_balance_hash:
-		save_balance_hash(current_balance_hash)
+	# 保存当前余额
+	if current_balances:
+		save_balance_history(current_balances)
 
 	if need_notify and notification_content:
 		# 构建通知内容
 		summary = [
-			'[STATS] Check-in result statistics:',
-			f'[SUCCESS] Success: {success_count}/{total_count}',
-			f'[FAIL] Failed: {total_count - success_count}/{total_count}',
+			'[统计] 签到结果统计:',
+			f'[成功] 成功: {success_count}/{total_count}',
+			f'[失败] 失败: {total_count - success_count}/{total_count}',
 		]
 
-		if success_count == total_count:
-			summary.append('[SUCCESS] All accounts check-in successful!')
+		if success_count == total_count and balance_increased:
+			summary.append('[成功] 签到成功且余额已增加!')
+		elif success_count == total_count:
+			summary.append('[成功] 所有账号签到成功（余额无变化）')
 		elif success_count > 0:
-			summary.append('[WARN] Some accounts check-in successful')
+			summary.append('[警告] 部分账号签到成功')
 		else:
-			summary.append('[ERROR] All accounts check-in failed')
+			summary.append('[错误] 所有账号签到失败')
 
-		time_info = f'[TIME] Execution time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+		time_info = f'[时间] 执行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
 
 		notify_content = '\n\n'.join([time_info, '\n'.join(notification_content), '\n'.join(summary)])
 
 		print(notify_content)
-		notify.push_message('AnyRouter Check-in Alert', notify_content, msg_type='text')
+		notify.push_message('AnyRouter 签到提醒', notify_content, msg_type='text')
+		print('[NOTIFY] Notification sent due to failures or balance increases')
+	else:
+		print('[INFO] All accounts successful and no balance increase detected, notification skipped')
+		# 构建通知内容
+		summary = [
+			'[统计] 签到结果统计:',
+			f'[成功] 成功: {success_count}/{total_count}',
+			f'[失败] 失败: {total_count - success_count}/{total_count}',
+		]
+
+		if success_count == total_count:
+			summary.append('[成功] 所有账号签到成功!')
+		elif success_count > 0:
+			summary.append('[警告] 部分账号签到成功')
+		else:
+			summary.append('[错误] 所有账号签到失败')
+
+		time_info = f'[时间] 执行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+
+		notify_content = '\n\n'.join([time_info, '\n'.join(notification_content), '\n'.join(summary)])
+
+		print(notify_content)
+		notify.push_message('AnyRouter 签到提醒', notify_content, msg_type='text')
 		print('[NOTIFY] Notification sent due to failures or balance changes')
 	else:
 		print('[INFO] All accounts successful and no balance changes detected, notification skipped')

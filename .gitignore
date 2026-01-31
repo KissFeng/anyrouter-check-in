@@ -4,6 +4,6 @@
 __pycache__
 .pytest_cache
 .ruff_cache
-balance_hash.txt
+balance.json
 
 .DS_Store
