@@ -365,29 +365,6 @@ async def main():
 		print('[NOTIFY] Notification sent due to failures or balance increases')
 	else:
 		print('[INFO] All accounts successful and no balance increase detected, notification skipped')
-		# 构建通知内容
-		summary = [
-			'[统计] 签到结果统计:',
-			f'[成功] 成功: {success_count}/{total_count}',
-			f'[失败] 失败: {total_count - success_count}/{total_count}',
-		]
-
-		if success_count == total_count:
-			summary.append('[成功] 所有账号签到成功!')
-		elif success_count > 0:
-			summary.append('[警告] 部分账号签到成功')
-		else:
-			summary.append('[错误] 所有账号签到失败')
-
-		time_info = f'[时间] 执行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
-
-		notify_content = '\n\n'.join([time_info, '\n'.join(notification_content), '\n'.join(summary)])
-
-		print(notify_content)
-		notify.push_message('AnyRouter 签到提醒', notify_content, msg_type='text')
-		print('[NOTIFY] Notification sent due to failures or balance changes')
-	else:
-		print('[INFO] All accounts successful and no balance changes detected, notification skipped')
 
 	# 设置退出码
 	sys.exit(0 if success_count > 0 else 1)
