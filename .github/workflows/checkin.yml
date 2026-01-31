@@ -65,9 +65,9 @@ jobs:
       uses: actions/cache@v4
       with:
         path: balance.json
-        key: balance-${{ github.sha }}
+        key: balance-data
         restore-keys: |
-          balance-
+          balance-data
 
     - name: 执行签到
       env:
